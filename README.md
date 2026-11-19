@@ -19,8 +19,11 @@ of at the next batch load.
  │ late inject│      └──────────────────┘      │   event_time lag → freshness │
  └────────────┘                                └──────────────────────────────┘
                                                      │
-                                                     ▼  (in progress)
-                                          windowed KPIs → alerts → Power BI
+                                                     ▼
+                                   WindowAggregator (60s tumbling, per feed)
+                                                     │
+                                                     ▼
+                                   KpiStore: SQLite dq_kpi_window + CSV  →  Power BI
 ```
 
 | Piece | File | What it does |
@@ -29,6 +32,9 @@ of at the next batch load.
 | Event generator | `src/dq_stream/events.py` | Random claims / eligibility / pharmacy events with adjustable error and late rates |
 | Validator | `src/dq_stream/validator.py` | Per-event checks; returns missing fields and rule errors, never raises on bad data |
 | Kafka I/O | `src/dq_stream/kafka_io.py` | Thin confluent-kafka producer/consumer wrapper (manual commits) |
+| KPI windows | `src/dq_stream/kpi.py` | Event-time tumbling windows per feed with a watermark for late data |
+| KPI store | `src/dq_stream/sink.py` | SQLite table `dq_kpi_window` (upserts) + CSV export for Power BI |
+| Simulator | `src/dq_stream/simulate.py` | Same pipeline without Kafka, with injectable incidents |
 
 ## Feed config
 
@@ -50,6 +56,46 @@ pharmacy:
 Supported field rules: `type: number` (+ `min` / `max`), `type: date` (+ `not_future`),
 `allowed: [...]`, `pattern: <regex>`.
 
+## KPIs
+
+One row per feed per window (default 60 seconds), keyed by **event time**:
+
+| KPI | Meaning |
+|---|---|
+| `events` | Events that belong to the window (a sudden drop = upstream problem) |
+| `completeness_pct` | % of events with every required field present |
+| `error_rate_pct` | % of events breaking at least one field rule |
+| `p50_lag_s` / `p95_lag_s` / `max_lag_s` | Processing time minus event time |
+| `sla_breach_pct` | % of events later than the feed's `freshness_sla_s` |
+| `dropped_late` | Events that arrived after their window had closed, counted on the window they arrived in |
+| `top_missing` / `top_error` | The field behind most of the problems - where to look first |
+
+A window closes when the feed's watermark (newest event time seen − 120s allowed
+lateness) passes its end, so moderately late events still land in the right minute
+while a big backlog shows up as `dropped_late` instead of silently rewriting history.
+
+## Simulate an incident (no Kafka needed)
+
+```bash
+python simulate.py --minutes 12 \
+    --error-spike pharmacy:4:7:0.15 \
+    --volume-drop eligibility:2:4:0.2 \
+    --late-burst claims:8:10:0.4
+```
+
+```
+window feed         events complete%  error%  p95 lag   sla% dropped  top problem
+08:02  eligibility      23     100.0     0.0     3.95    0.0       0             <- volume drop
+08:04  pharmacy        121     92.56    6.61     3.66   2.48       0  fill_date  <- error spike
+08:06  claims          133     100.0    0.75   121.31   5.26       0  claim_amount
+08:08  claims           68     100.0     0.0     3.97    0.0      33             <- late burst
+08:09  claims           82     100.0     0.0     3.99    0.0      34
+...
+36 KPI rows -> output/dq_kpi.db and output/dq_kpi_window.csv
+```
+
+Format is `feed:start_minute:end_minute:value`; flags can be repeated.
+
 ## Quick start
 
 ```bash
@@ -59,8 +105,8 @@ pip install -r requirements.txt
 
 docker compose up -d               # Kafka on localhost:9092, Kafka UI on http://localhost:8080
 
-# terminal 1 - consume and validate
-python consumer.py
+# terminal 1 - consume, validate, write KPI windows to output/dq_kpi.db
+python consumer.py --csv
 
 # terminal 2 - send a healthy feed, then a bad one
 python producer.py --feed claims --rate 20 --seconds 60
@@ -83,11 +129,12 @@ python -m pytest -q
 
 - [x] Feed config, synthetic event generator, per-event validator
 - [x] Kafka producer / consumer with manual offset commits
-- [ ] Tumbling-window KPIs per feed (completeness, error rate, p95 lag, volume)
-- [ ] KPI sink for Power BI + alerting when a feed drifts past thresholds
+- [x] Tumbling-window KPIs per feed (completeness, error rate, p95 lag, volume)
+- [x] KPI store (SQLite + CSV) and offline simulator with incident injection
+- [ ] Alerting when a feed drifts past thresholds or away from its own baseline
 - [ ] Power BI dashboard
 - [ ] CI with an integration test against a real Kafka broker
 
 ## Tech
 
-Python, Apache Kafka (KRaft), confluent-kafka, Docker Compose, PyYAML, pytest
+Python, Apache Kafka (KRaft), confluent-kafka, SQLite, Docker Compose, PyYAML, pytest
