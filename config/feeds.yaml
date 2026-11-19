@@ -1,0 +1,45 @@
+# Feeds monitored by the pipeline. Each feed is one Kafka topic.
+#
+# required        - fields that must be present and non-empty (completeness KPI)
+# rules           - per-field validity checks (error-rate KPI)
+# freshness_sla_s - max seconds between event_time and when we process it
+# thresholds      - when a KPI for a window crosses these, raise an alert
+
+defaults:
+  window_seconds: 60
+  thresholds:
+    min_completeness_pct: 98.0
+    max_error_rate_pct: 2.0
+    max_p95_lag_s: 300
+    volume_change_pct: 50
+
+feeds:
+  claims:
+    topic: dq.claims
+    freshness_sla_s: 120
+    required: [claim_id, member_id, claim_amount, status, service_date]
+    rules:
+      claim_amount: {type: number, min: 0, max: 100000}
+      status: {allowed: [PAID, DENIED, PENDING]}
+      service_date: {type: date, not_future: true}
+      member_id: {pattern: "^M[0-9]{5}$"}
+
+  eligibility:
+    topic: dq.eligibility
+    freshness_sla_s: 300
+    required: [member_id, plan_code, effective_date]
+    rules:
+      plan_code: {allowed: [PPO, HMO, EPO]}
+      effective_date: {type: date}
+      member_id: {pattern: "^M[0-9]{5}$"}
+
+  pharmacy:
+    topic: dq.pharmacy
+    freshness_sla_s: 60
+    required: [rx_id, member_id, ndc_code, quantity, fill_date]
+    rules:
+      quantity: {type: number, min: 1, max: 1000}
+      ndc_code: {pattern: "^[0-9]{5}-[0-9]{4}-[0-9]{2}$"}
+      fill_date: {type: date, not_future: true}
+    thresholds:
+      max_error_rate_pct: 1.0      # pharmacy is stricter than the default
