@@ -1,0 +1,4 @@
+PyYAML>=6.0
+pandas>=2.0
+confluent-kafka>=2.3
+pytest>=7.0
