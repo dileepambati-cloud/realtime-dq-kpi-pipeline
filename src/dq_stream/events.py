@@ -26,35 +26,35 @@ def _member_id(rng):
     return f"M{rng.randint(1, 99999):05d}"
 
 
-def _recent_date(rng, days=60):
-    return (utcnow().date() - timedelta(days=rng.randint(0, days))).isoformat()
+def _recent_date(rng, today, days=60):
+    return (today - timedelta(days=rng.randint(0, days))).isoformat()
 
 
-def _claims(rng):
+def _claims(rng, today):
     return {
         "claim_id": f"C{rng.randint(1, 9_999_999):07d}",
         "member_id": _member_id(rng),
         "claim_amount": round(rng.uniform(20, 5000), 2),
         "status": rng.choice(STATUSES),
-        "service_date": _recent_date(rng),
+        "service_date": _recent_date(rng, today),
     }
 
 
-def _eligibility(rng):
+def _eligibility(rng, today):
     return {
         "member_id": _member_id(rng),
         "plan_code": rng.choice(PLANS),
-        "effective_date": _recent_date(rng, 365),
+        "effective_date": _recent_date(rng, today, 365),
     }
 
 
-def _pharmacy(rng):
+def _pharmacy(rng, today):
     return {
         "rx_id": f"RX{rng.randint(1, 9_999_999):07d}",
         "member_id": _member_id(rng),
         "ndc_code": f"{rng.randint(10000, 99999)}-{rng.randint(1000, 9999)}-{rng.randint(10, 99)}",
         "quantity": rng.randint(1, 120),
-        "fill_date": _recent_date(rng, 30),
+        "fill_date": _recent_date(rng, today, 30),
     }
 
 
@@ -62,15 +62,15 @@ BUILDERS = {"claims": _claims, "eligibility": _eligibility, "pharmacy": _pharmac
 
 
 # ways a record can go wrong - each takes a payload and breaks it in place
-def _drop_field(payload, rng):
+def _drop_field(payload, rng, today):
     payload[rng.choice(list(payload))] = None
 
 
-def _blank_field(payload, rng):
+def _blank_field(payload, rng, today):
     payload[rng.choice(list(payload))] = ""
 
 
-def _bad_value(payload, rng):
+def _bad_value(payload, rng, today):
     if "claim_amount" in payload:
         payload["claim_amount"] = -abs(payload["claim_amount"])
     elif "quantity" in payload:
@@ -79,14 +79,14 @@ def _bad_value(payload, rng):
         payload["plan_code"] = "XYZ"
 
 
-def _future_date(payload, rng):
+def _future_date(payload, rng, today):
     for key in ("service_date", "fill_date", "effective_date"):
         if key in payload:
-            payload[key] = (utcnow().date() + timedelta(days=rng.randint(5, 400))).isoformat()
+            payload[key] = (today + timedelta(days=rng.randint(5, 400))).isoformat()
             return
 
 
-def _bad_member(payload, rng):
+def _bad_member(payload, rng, today):
     payload["member_id"] = f"MBR-{rng.randint(1, 999)}"
 
 
@@ -98,11 +98,14 @@ def make_event(feed, rng=None, error_rate=0.0, late_rate=0.0, max_late_s=900, no
     if feed not in BUILDERS:
         raise ValueError(f"unknown feed {feed}. options: {sorted(BUILDERS)}")
 
-    payload = BUILDERS[feed](rng)
-    if rng.random() < error_rate:
-        rng.choice(CORRUPTIONS)(payload, rng)
-
+    # all dates are relative to `now`, so a simulation of a past day stays consistent
     event_time = now or utcnow()
+    today = event_time.date()
+
+    payload = BUILDERS[feed](rng, today)
+    if rng.random() < error_rate:
+        rng.choice(CORRUPTIONS)(payload, rng, today)
+
     if rng.random() < late_rate:
         # event happened a while ago but is only arriving now
         event_time = event_time - timedelta(seconds=rng.randint(60, max_late_s))
