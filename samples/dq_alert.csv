@@ -1,0 +1,15 @@
+feed,metric,status,severity,window_start,value,expected,message
+pharmacy,completeness,FIRING,CRITICAL,2026-11-19T08:21:00+00:00,94.12,>= 98.0%,"pharmacy completeness=94.12, expected >= 98.0%"
+pharmacy,error_rate,FIRING,CRITICAL,2026-11-19T08:21:00+00:00,6.72,<= 1.0%,"pharmacy error_rate=6.72, expected <= 1.0%"
+pharmacy,completeness,RESOLVED,CRITICAL,2026-11-19T08:24:00+00:00,100.0,>= 98.0%,pharmacy completeness back to normal (100.0)
+pharmacy,error_rate,RESOLVED,CRITICAL,2026-11-19T08:24:00+00:00,0.83,<= 1.0%,pharmacy error_rate back to normal (0.83)
+eligibility,volume,FIRING,CRITICAL,2026-11-19T08:29:00+00:00,25.0,120 +/-50%,"eligibility volume=25, expected 120 +/-50%"
+claims,p95_lag,FIRING,WARN,2026-11-19T08:31:00+00:00,112.35,~3.86 for this feed (z=+21.7),"claims p95_lag=112.35, expected ~3.86 for this feed (z=+21.7)"
+eligibility,volume,RESOLVED,CRITICAL,2026-11-19T08:31:00+00:00,120.0,120 +/-50%,eligibility volume back to normal (120)
+claims,p95_lag,RESOLVED,WARN,2026-11-19T08:33:00+00:00,3.86,~3.86 for this feed (z=+21.7),claims p95_lag back to normal (3.86)
+claims,volume,FIRING,WARN,2026-11-19T08:34:00+00:00,68.0,~121.93 for this feed (z=-4.4),"claims volume=68, expected ~121.93 for this feed (z=-4.4)"
+claims,volume,RESOLVED,WARN,2026-11-19T08:35:00+00:00,121.0,~121.93 for this feed (z=-4.4),claims volume back to normal (121)
+claims,completeness,FIRING,CRITICAL,2026-11-19T08:46:00+00:00,97.5,>= 98.0%,"claims completeness=97.5, expected >= 98.0%"
+claims,error_rate,FIRING,CRITICAL,2026-11-19T08:46:00+00:00,6.67,<= 2.0%,"claims error_rate=6.67, expected <= 2.0%"
+claims,completeness,RESOLVED,CRITICAL,2026-11-19T08:49:00+00:00,100.0,>= 98.0%,claims completeness back to normal (100.0)
+claims,error_rate,RESOLVED,CRITICAL,2026-11-19T08:49:00+00:00,0.0,<= 2.0%,claims error_rate back to normal (0.0)
