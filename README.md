@@ -23,7 +23,10 @@ of at the next batch load.
                                    WindowAggregator (60s tumbling, per feed)
                                                      │
                                                      ▼
-                                   KpiStore: SQLite dq_kpi_window + CSV  →  Power BI
+                                   AlertEngine: thresholds + baseline drift ──→ log / Slack
+                                                     │
+                                                     ▼
+                       KpiStore: SQLite dq_kpi_window + dq_alert, CSV export  →  Power BI
 ```
 
 | Piece | File | What it does |
@@ -34,6 +37,7 @@ of at the next batch load.
 | Kafka I/O | `src/dq_stream/kafka_io.py` | Thin confluent-kafka producer/consumer wrapper (manual commits) |
 | KPI windows | `src/dq_stream/kpi.py` | Event-time tumbling windows per feed with a watermark for late data |
 | KPI store | `src/dq_stream/sink.py` | SQLite table `dq_kpi_window` (upserts) + CSV export for Power BI |
+| Alerts | `src/dq_stream/alerts.py` | Threshold (CRITICAL) and baseline-drift (WARN) alerts with FIRING / RESOLVED state |
 | Simulator | `src/dq_stream/simulate.py` | Same pipeline without Kafka, with injectable incidents |
 
 ## Feed config
@@ -74,6 +78,34 @@ A window closes when the feed's watermark (newest event time seen − 120s allow
 lateness) passes its end, so moderately late events still land in the right minute
 while a big backlog shows up as `dropped_late` instead of silently rewriting history.
 
+## Alerts
+
+Each closed window is checked per metric (completeness, error rate, p95 lag, volume):
+
+| Check | Severity | Example |
+|---|---|---|
+| Threshold from `feeds.yaml` | CRITICAL | pharmacy error rate 6.7%, limit 1% |
+| Drift from the feed's own baseline (z-score over the last 15 healthy windows) | WARN | claims p95 lag 112s, normally ~4s - still under the 300s limit, but something changed |
+| Volume vs. recent average | CRITICAL | eligibility 25 events/min, normally ~120 |
+
+To keep it quiet enough to trust:
+
+- a metric must be bad for **2 windows in a row** before it fires
+- each incident produces one `FIRING` and one `RESOLVED`, not an alert per minute
+- only healthy windows feed the baseline, so a long incident doesn't become "normal"
+- spread floors stop 1-2 bad records out of ~120 from looking like drift
+
+Tested on 10 simulated hours of normal traffic: **0 alerts**; every injected incident
+fires within 2 minutes. Alerts go to the log, the `dq_alert` table / `dq_alert.csv`, and
+Slack if `SLACK_WEBHOOK_URL` is set (see `.env.example`). A failing webhook is logged and
+never stops the consumer.
+
+## Power BI
+
+See [docs/powerbi.md](docs/powerbi.md) - data import, the DAX measures (event-weighted
+completeness / error rate, open alerts, health score) and the report layout.
+`samples/` has a 60-minute run with four incidents so the report can be built right away.
+
 ## Simulate an incident (no Kafka needed)
 
 ```bash
@@ -91,10 +123,27 @@ window feed         events complete%  error%  p95 lag   sla% dropped  top proble
 08:08  claims           68     100.0     0.0     3.97    0.0      33             <- late burst
 08:09  claims           82     100.0     0.0     3.99    0.0      34
 ...
-36 KPI rows -> output/dq_kpi.db and output/dq_kpi_window.csv
+36 KPI rows -> output/dq_kpi.db, output/dq_kpi_window.csv, output/dq_alert.csv
 ```
 
-Format is `feed:start_minute:end_minute:value`; flags can be repeated.
+Format is `feed:start_minute:end_minute:value`; flags can be repeated. The run also prints
+the alerts it raised:
+
+```
+Alerts (8):
+  08:05  FIRING   CRITICAL pharmacy completeness=97.46, expected >= 98.0%
+  08:05  FIRING   CRITICAL pharmacy error_rate=5.93, expected <= 1.0%
+  08:06  FIRING   WARN     claims p95_lag=121.31, expected ~3.84 for this feed (z=+23.5)
+  08:07  RESOLVED CRITICAL pharmacy completeness back to normal (100.0)
+  08:07  RESOLVED CRITICAL pharmacy error_rate back to normal (0.0)
+  08:08  RESOLVED WARN     claims p95_lag back to normal (3.97)
+  08:09  FIRING   WARN     claims volume=82, expected ~123.00 for this feed (z=-3.3)
+  08:10  RESOLVED WARN     claims volume back to normal (121)
+```
+
+The eligibility drop at 08:02 isn't flagged here: volume and drift checks need 5 minutes
+of history first, and that incident starts in minute 2. In the 60-minute run in
+`samples/` the same kind of drop is caught.
 
 ## Quick start
 
@@ -131,8 +180,8 @@ python -m pytest -q
 - [x] Kafka producer / consumer with manual offset commits
 - [x] Tumbling-window KPIs per feed (completeness, error rate, p95 lag, volume)
 - [x] KPI store (SQLite + CSV) and offline simulator with incident injection
-- [ ] Alerting when a feed drifts past thresholds or away from its own baseline
-- [ ] Power BI dashboard
+- [x] Alerting when a feed drifts past thresholds or away from its own baseline (log, table, Slack)
+- [x] Power BI guide with DAX measures + sample data
 - [ ] CI with an integration test against a real Kafka broker
 
 ## Tech
