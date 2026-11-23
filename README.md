@@ -1,5 +1,10 @@
 # Real-Time Data Quality KPI Pipeline
 
+[![CI](https://github.com/dileepambati-cloud/realtime-dq-kpi-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/dileepambati-cloud/realtime-dq-kpi-pipeline/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-blue)
+![Kafka](https://img.shields.io/badge/Kafka-3.8%20KRaft-black)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 Streaming data quality monitoring for healthcare event feeds (claims, eligibility,
 pharmacy). Events flow through Kafka; a Python consumer validates every event as it
 arrives and computes data quality KPIs - **completeness**, **error rate**, **freshness**
@@ -37,6 +42,7 @@ of at the next batch load.
 | Kafka I/O | `src/dq_stream/kafka_io.py` | Thin confluent-kafka producer/consumer wrapper (manual commits) |
 | KPI windows | `src/dq_stream/kpi.py` | Event-time tumbling windows per feed with a watermark for late data |
 | KPI store | `src/dq_stream/sink.py` | SQLite table `dq_kpi_window` (upserts) + CSV export for Power BI |
+| Pipeline loop | `src/dq_stream/pipeline.py` | validate → window → store → alert; takes any message iterator, so it's testable without Kafka |
 | Alerts | `src/dq_stream/alerts.py` | Threshold (CRITICAL) and baseline-drift (WARN) alerts with FIRING / RESOLVED state |
 | Simulator | `src/dq_stream/simulate.py` | Same pipeline without Kafka, with injectable incidents |
 
@@ -174,6 +180,45 @@ Tests don't need Kafka either:
 python -m pytest -q
 ```
 
+The Kafka round-trip test runs when a broker is available:
+
+```bash
+docker compose up -d
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092 python -m pytest tests/integration -v
+```
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) on every push / PR:
+
+| Job | What it does |
+|---|---|
+| `test` | ruff lint + unit tests on Python 3.10, 3.11, 3.12 |
+| `kafka-integration` | starts a real Kafka 3.8 broker as a service container, produces 500 events, consumes them through the full pipeline and checks every event lands in a KPI window and the corrupted feed shows a high error rate |
+| `incident-demo` | 60-minute simulation with four injected incidents; KPI and alert CSVs uploaded as a build artifact |
+
+## Project structure
+
+```
+├── .github/workflows/ci.yml
+├── config/feeds.yaml            # feeds, rules, SLAs, thresholds
+├── docs/powerbi.md              # Power BI model, DAX, layout
+├── samples/                     # 60-minute run with incidents (KPI + alert CSVs)
+├── src/dq_stream/
+│   ├── config.py                # yaml -> dataclasses
+│   ├── events.py                # synthetic event generator
+│   ├── validator.py             # per-event checks
+│   ├── kafka_io.py              # confluent-kafka wrapper
+│   ├── kpi.py                   # tumbling windows + watermark
+│   ├── alerts.py                # thresholds, drift, Slack
+│   ├── sink.py                  # SQLite + CSV
+│   ├── pipeline.py              # consumer loop
+│   └── simulate.py              # offline incident simulation
+├── tests/                       # unit tests + tests/integration (real Kafka)
+├── producer.py / consumer.py / simulate.py
+└── docker-compose.yml           # Kafka (KRaft) + Kafka UI
+```
+
 ## Roadmap
 
 - [x] Feed config, synthetic event generator, per-event validator
@@ -182,8 +227,14 @@ python -m pytest -q
 - [x] KPI store (SQLite + CSV) and offline simulator with incident injection
 - [x] Alerting when a feed drifts past thresholds or away from its own baseline (log, table, Slack)
 - [x] Power BI guide with DAX measures + sample data
-- [ ] CI with an integration test against a real Kafka broker
+- [x] CI with an integration test against a real Kafka broker
+- [ ] Next: schema registry (Avro) and a dead-letter topic for unreadable messages
 
 ## Tech
 
-Python, Apache Kafka (KRaft), confluent-kafka, SQLite, Docker Compose, PyYAML, pytest
+Python, Apache Kafka (KRaft), confluent-kafka, SQLite, Power BI, Docker Compose, PyYAML,
+pytest, ruff, GitHub Actions
+
+## License
+
+MIT
