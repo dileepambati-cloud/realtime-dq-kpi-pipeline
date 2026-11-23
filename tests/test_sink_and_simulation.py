@@ -61,3 +61,13 @@ def test_store_upsert_and_csv(tmp_path):
     assert n == len(recs) == len(rows)
     assert list(rows[0]) == COLUMNS
     store.close()
+
+
+def test_simulation_does_not_depend_on_todays_date():
+    # generated dates follow the simulated clock, so a quiet run stays quiet
+    # whether it is dated in the past or the future
+    from datetime import datetime, timezone
+    for year in (2020, 2030):
+        recs = run_simulation(CFG, minutes=3, seed=6,
+                              start=datetime(year, 1, 15, 9, 0, tzinfo=timezone.utc))
+        assert max(r.error_rate_pct for r in recs) < 4, year
