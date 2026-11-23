@@ -1,6 +1,7 @@
 """
 Reads events from all configured topics, validates each one, rolls them
-into per-feed tumbling windows and writes closed windows to the KPI store.
+into per-feed tumbling windows, writes closed windows to the KPI store and
+raises alerts (log + Slack if SLACK_WEBHOOK_URL is set) when a feed drifts.
 
     python consumer.py                  # run until Ctrl+C
     python consumer.py --idle-stop 10   # stop after 10 empty polls (handy for tests/CI)
@@ -15,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
+from dq_stream.alerts import AlertEngine, notify_log, notify_slack  # noqa: E402
 from dq_stream.config import load_config  # noqa: E402
 from dq_stream.kafka_io import EventConsumer  # noqa: E402
 from dq_stream.kpi import WindowAggregator  # noqa: E402
@@ -43,6 +45,7 @@ def main():
     cfg = load_config()
     consumer = EventConsumer([f.topic for f in cfg.feeds.values()], group_id=args.group)
     agg = WindowAggregator(cfg.feeds, window_s=cfg.window_seconds)
+    alerts = AlertEngine(cfg.feeds)
     store = KpiStore(args.db)
     unreadable = Counter()
 
@@ -51,8 +54,14 @@ def main():
         if records:
             store.write(records)
             log_windows(records)
+            changed = [a for r in records for a in alerts.evaluate(r)]
+            if changed:
+                store.write_alerts(changed)
+                notify_log(changed)
+                notify_slack(changed)
             if args.csv:
                 store.export_csv()
+                store.export_alerts_csv()
 
     try:
         for i, (topic, event, msg) in enumerate(consumer.messages(max_idle_polls=args.idle_stop), 1):

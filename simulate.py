@@ -5,7 +5,8 @@ Run the KPI pipeline on simulated traffic and save the results.
     python simulate.py --minutes 60 --error-spike pharmacy:10:15:0.12
     python simulate.py --late-burst claims:20:25:0.4 --volume-drop eligibility:40:45:0.2
 
-Writes output/dq_kpi.db (SQLite) and output/dq_kpi_window.csv (for Power BI).
+Writes output/dq_kpi.db (SQLite) plus output/dq_kpi_window.csv and
+output/dq_alert.csv for Power BI.
 """
 import argparse
 import sys
@@ -13,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
+from dq_stream.alerts import AlertEngine  # noqa: E402
 from dq_stream.config import load_config  # noqa: E402
 from dq_stream.simulate import Incident, run_simulation  # noqa: E402
 from dq_stream.sink import KpiStore  # noqa: E402
@@ -54,9 +56,14 @@ def main():
     records = run_simulation(cfg, minutes=args.minutes, incidents=incidents, seed=args.seed,
                              events_per_min={f: args.rate for f in cfg.feeds})
 
+    engine = AlertEngine(cfg.feeds)
+    alerts = [a for r in records for a in engine.evaluate(r)]
+
     store = KpiStore(args.db)
     store.write(records)
+    store.write_alerts(alerts)
     csv_path, rows = store.export_csv(args.csv)
+    alert_path, _ = store.export_alerts_csv(str(Path(args.csv).with_name("dq_alert.csv")))
 
     print(f"{'window':<6} {'feed':<12} {'events':>6} {'complete%':>9} {'error%':>7} "
           f"{'p95 lag':>8} {'sla%':>6} {'dropped':>7}  top problem")
@@ -65,7 +72,12 @@ def main():
         problem = r.top_error or r.top_missing or ""
         print(f"{r.window_start[11:16]:<6} {r.feed:<12} {r.events:>6} {r.completeness_pct:>9} "
               f"{r.error_rate_pct:>7} {r.p95_lag_s:>8} {r.sla_breach_pct:>6} {r.dropped_late:>7}  {problem}")
-    print(f"\n{rows} KPI rows -> {args.db} and {csv_path}")
+    print(f"\nAlerts ({len(alerts)}):")
+    for a in alerts or []:
+        print(f"  {a.window_start[11:16]}  {a.status:<8} {a.severity:<8} {a.message}")
+    if not alerts:
+        print("  none")
+    print(f"\n{rows} KPI rows -> {args.db}, {csv_path}, {alert_path}")
     store.close()
 
 
