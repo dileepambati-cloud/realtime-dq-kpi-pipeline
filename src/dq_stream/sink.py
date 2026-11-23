@@ -32,7 +32,21 @@ CREATE TABLE IF NOT EXISTS dq_kpi_window (
     top_error         TEXT,
     PRIMARY KEY (feed, window_start)
 );
+
+CREATE TABLE IF NOT EXISTS dq_alert (
+    feed          TEXT NOT NULL,
+    metric        TEXT NOT NULL,
+    status        TEXT NOT NULL,
+    severity      TEXT NOT NULL,
+    window_start  TEXT NOT NULL,
+    value         REAL,
+    expected      TEXT,
+    message       TEXT,
+    PRIMARY KEY (feed, metric, status, window_start)
+);
 """
+
+ALERT_COLUMNS = ["feed", "metric", "status", "severity", "window_start", "value", "expected", "message"]
 
 
 class KpiStore:
@@ -54,6 +68,23 @@ class KpiStore:
         self.conn.commit()
         return len(records)
 
+    def write_alerts(self, alerts):
+        if not alerts:
+            return 0
+        self.conn.executemany(
+            f"INSERT OR REPLACE INTO dq_alert ({','.join(ALERT_COLUMNS)}) "
+            f"VALUES ({','.join('?' * len(ALERT_COLUMNS))})",
+            [tuple(a.to_dict()[c] for c in ALERT_COLUMNS) for a in alerts],
+        )
+        self.conn.commit()
+        return len(alerts)
+
+    def alerts(self, feed=None):
+        sql, args = "SELECT * FROM dq_alert", ()
+        if feed:
+            sql, args = sql + " WHERE feed = ?", (feed,)
+        return [dict(r) for r in self.conn.execute(sql + " ORDER BY window_start", args).fetchall()]
+
     def recent(self, feed, limit=10):
         """Most recent windows for a feed, newest first."""
         rows = self.conn.execute(
@@ -74,6 +105,18 @@ class KpiStore:
         with open(path, "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(COLUMNS)
+            w.writerows(tuple(r) for r in rows)
+        return path, len(rows)
+
+    def export_alerts_csv(self, path="output/dq_alert.csv"):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rows = self.conn.execute(
+            f"SELECT {','.join(ALERT_COLUMNS)} FROM dq_alert ORDER BY window_start, feed"
+        ).fetchall()
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(ALERT_COLUMNS)
             w.writerows(tuple(r) for r in rows)
         return path, len(rows)
 
